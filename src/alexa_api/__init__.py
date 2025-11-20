@@ -4,4 +4,4 @@
 
 from .main import execute_command, get_device_list
 
-__all__ = ["execute_command, get_device_list"]
+__all__ = ["execute_command", "get_device_list"]

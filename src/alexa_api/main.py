@@ -229,27 +229,62 @@ def find_device(devlist, device):
     return None
 
 
-def get_customer_id(cookies):
+def get_customer_id(cookies, devlist=None):
     headers = {
         "DNT": "1",
         "Connection": "keep-alive",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:1.0) bash-script/1.0",
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+        "Referer": f"https://alexa.{amazon}/spa/index.html",
+        "Origin": f"https://alexa.{amazon}",
     }
 
-    url = f"https://{alexa_domain}/api/bootstrap?version=0"
-    response = requests.get(url, headers=headers, cookies=cookies, allow_redirects=True)
+    if devlist:
+        try:
+            if "customerId" in devlist:
+                return devlist["customerId"]
+            
+            if "devices" in devlist and isinstance(devlist["devices"], list) and len(devlist["devices"]) > 0:
+                device = devlist["devices"][0]
+                if "deviceOwnerCustomerId" in device:
+                    return device["deviceOwnerCustomerId"]
+                if "customerId" in device:
+                    return device["customerId"]
+        except (KeyError, TypeError) as e:
+            logger.debug(f"Error extracting customerId from devlist: {e}")
 
+    url = f"https://{alexa_domain}/api/accounts/list"
+    response = requests.get(url, headers=headers, cookies=cookies, allow_redirects=True)
+    
     if response.status_code == 200:
         try:
             data = response.json()
-            authentication = data.get("authentication", {})
-            if authentication.get("authenticated"):
-                return authentication.get("customerId")
-        except ValueError:
-            logger.error("Invalid JSON response.")
-    else:
-        logger.error(f"Request failed with status code {response.status_code}")
+            if "customerId" in data:
+                return data["customerId"]
+            if "accounts" in data and isinstance(data["accounts"], list) and len(data["accounts"]) > 0:
+                account = data["accounts"][0]
+                if "customerId" in account:
+                    return account["customerId"]
+        except (ValueError, KeyError, TypeError) as e:
+            logger.debug(f"Error parsing /api/accounts/list response: {e}")
 
+    if not devlist:
+        url = f"https://{alexa_domain}/api/devices-v2/device?cached=false"
+        response = requests.get(url, headers=headers, cookies=cookies, allow_redirects=True)
+        
+        if response.status_code == 200:
+            try:
+                data = response.json()
+                if "devices" in data and isinstance(data["devices"], list) and len(data["devices"]) > 0:
+                    device = data["devices"][0]
+                    if "deviceOwnerCustomerId" in device:
+                        return device["deviceOwnerCustomerId"]
+                    if "customerId" in device:
+                        return device["customerId"]
+            except (ValueError, KeyError, TypeError) as e:
+                logger.debug(f"Error parsing device list response: {e}")
+
+    logger.error("customerId not found in any endpoint")
     return None
 
 
@@ -328,13 +363,8 @@ def fetch_new_cookies(refresh_token):
 
 
 def execute_command(command_type, command_message, refresh_token, device=None):
-    # Step 1: Fetch the cookie
-    logger.debug("Fetching cookies...")
-
     cookies = fetch_cookie_with_refresh_token(refresh_token)
 
-    # Step 2: Find the target device
-    logger.debug("Finding the target device...")
     device_info = set_device(refresh_token, device)
 
     if not device_info:
@@ -343,10 +373,9 @@ def execute_command(command_type, command_message, refresh_token, device=None):
     device_type = device_info.get("deviceType", "")
     device_serial_number = device_info.get("deviceSerialNumber", "")
 
-    customerId = get_customer_id(cookies)
+    devlist = get_devlist(refresh_token, refresh=False)
+    customerId = get_customer_id(cookies, devlist=devlist)
 
-    # Step 3: Execute the command
-    logger.debug("Executing the command...")
     status_code, response_text = run_cmd(
         command_type,
         command_message,
@@ -355,7 +384,6 @@ def execute_command(command_type, command_message, refresh_token, device=None):
         customerId,
         cookies,
     )
-    logger.debug(f"Response: {status_code}")
 
     return status_code, response_text
 
